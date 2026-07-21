@@ -88,22 +88,29 @@ def obter_tipos_e_status(leads):
 
 @app.route('/api/cidades/<uf>')
 def api_cidades(uf):
-    """Retorna a lista de cidades para a UF (priorizando abas existentes e recorrendo ao IBGE)"""
+    """Retorna a lista de cidades para a UF — sempre mescla abas das planilhas + todas as cidades IBGE"""
     uf_upper = uf.upper()
-    cidades_existentes = obter_cidades_por_uf(LEADS_MEMORIA).get(uf_upper, [])
-    
-    # Se já existirem abas/cidades carregadas de planilhas para esta UF
-    if cidades_existentes:
-        return jsonify({"uf": uf_upper, "cidades": cidades_existentes, "fonte": "planilhas"})
-    
-    # Caso contrário, busca as cidades oficiais do IBGE para aquele estado
+    cidades_planilha = obter_cidades_por_uf(LEADS_MEMORIA).get(uf_upper, [])
+
+    cidades_ibge = []
     try:
         dados_ibge = buscar_cidades_ibge(uf_upper)
         cidades_ibge = [d['cidade'] for d in dados_ibge]
-        return jsonify({"uf": uf_upper, "cidades": cidades_ibge, "fonte": "ibge"})
     except Exception as e:
         print(f"Erro ao buscar IBGE para {uf_upper}: {e}")
-        return jsonify({"uf": uf_upper, "cidades": ["Geral"], "fonte": "fallback"})
+
+    # Mescla: abas da planilha aparecem primeiro (marcadas com ★), depois o restante do IBGE
+    cidades_planilha_set = set(cidades_planilha)
+    cidades_ibge_extras = [c for c in cidades_ibge if c not in cidades_planilha_set]
+
+    # Abas existentes ficam no topo com marcador visual
+    cidades_com_aba = [f"★ {c}" for c in sorted(cidades_planilha)]
+    cidades_finais = cidades_com_aba + sorted(cidades_ibge_extras)
+
+    if not cidades_finais:
+        cidades_finais = ["Geral"]
+
+    return jsonify({"uf": uf_upper, "cidades": cidades_finais, "fonte": "misto"})
 
 @app.route('/')
 def index():
