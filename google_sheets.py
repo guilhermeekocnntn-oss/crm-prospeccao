@@ -40,11 +40,80 @@ ESTADOS_MAP = {
 
 folder_cache = {}
 
+# Nome do arquivo de cache JSON armazenado no Google Drive (para persistência no Vercel)
+DRIVE_CACHE_FILENAME = "crm_leads_cache.json"
+
 def normalizar(texto):
     if not texto:
         return ""
     nfkd = unicodedata.normalize('NFD', str(texto))
     return "".join([c for c in nfkd if not unicodedata.combining(c)]).lower().strip()
+
+def salvar_cache_no_drive(todos_leads):
+    """Salva o cache de leads como arquivo JSON no Google Drive para persistência entre deploys."""
+    try:
+        _, drive_service = criar_servicos()
+        if not drive_service:
+            return False
+
+        conteudo = json.dumps(todos_leads, ensure_ascii=False, indent=2).encode("utf-8")
+        media = MediaIoBaseUpload(io.BytesIO(conteudo), mimetype="application/json", resumable=False)
+
+        # Verifica se o arquivo de cache já existe no Drive
+        results = drive_service.files().list(
+            q=f"name='{DRIVE_CACHE_FILENAME}' and trashed=false",
+            fields="files(id, name)",
+            spaces="drive"
+        ).execute()
+        arquivos = results.get("files", [])
+
+        if arquivos:
+            # Atualiza o arquivo existente
+            file_id = arquivos[0]["id"]
+            drive_service.files().update(fileId=file_id, media_body=media).execute()
+            print(f"✅ Cache atualizado no Drive: {DRIVE_CACHE_FILENAME}")
+        else:
+            # Cria um novo arquivo de cache
+            metadata = {"name": DRIVE_CACHE_FILENAME, "mimeType": "application/json"}
+            drive_service.files().create(body=metadata, media_body=media, fields="id").execute()
+            print(f"✅ Cache criado no Drive: {DRIVE_CACHE_FILENAME}")
+        return True
+    except Exception as e:
+        print(f"⚠️ Erro ao salvar cache no Drive: {e}")
+        return False
+
+def carregar_cache_do_drive():
+    """Baixa o cache JSON do Google Drive. Rápido: apenas 1 chamada de API."""
+    try:
+        _, drive_service = criar_servicos()
+        if not drive_service:
+            return None
+
+        results = drive_service.files().list(
+            q=f"name='{DRIVE_CACHE_FILENAME}' and trashed=false",
+            fields="files(id, name)",
+            spaces="drive"
+        ).execute()
+        arquivos = results.get("files", [])
+
+        if not arquivos:
+            print("ℹ️ Nenhum cache encontrado no Drive. Será necessário sincronizar.")
+            return None
+
+        file_id = arquivos[0]["id"]
+        request = drive_service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        fh.seek(0)
+        leads = json.loads(fh.read().decode("utf-8"))
+        print(f"⚡ Cache do Drive carregado: {len(leads)} leads.")
+        return leads
+    except Exception as e:
+        print(f"⚠️ Erro ao carregar cache do Drive: {e}")
+        return None
 
 def criar_servicos():
     """Cria instâncias isoladas usando credentials.json local ou a variável GOOGLE_CREDENTIALS_JSON no Vercel"""
@@ -230,22 +299,36 @@ def processar_item_planilha(item):
     return leads_item
 
 def obter_todos_leads_eko(force_refresh=False):
+    # 1. Cache local (disco) — instantâneo em ambiente local
     if not force_refresh and os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, 'r', encoding='utf-8') as f:
                 todos_leads = json.load(f)
-                print(f"⚡ CACHE LOCAL CARREGADO INSTANTANEAMENTE: {len(todos_leads)} leads.")
+                print(f"⚡ CACHE LOCAL CARREGADO: {len(todos_leads)} leads.")
                 return todos_leads
         except Exception:
             pass
 
+    # 2. Cache no Google Drive — usado no Vercel para persistência entre deploys
+    if not force_refresh:
+        leads_cache_drive = carregar_cache_do_drive()
+        if leads_cache_drive is not None:
+            # Salva localmente em /tmp para a próxima requisição nesta instância
+            try:
+                with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(leads_cache_drive, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            return leads_cache_drive
+
+    # 3. Varredura completa das planilhas (só quando force_refresh=True)
     gclient, drive_service = criar_servicos()
     if not drive_service:
         print("⚠️ Conexão com o Google Drive indisponível (credenciais ausentes).")
         return []
     
     print("\n" + "🚀 " + "="*55)
-    print(" Buscando e Sincronizando Planilhas do Drive (Conexões Estáveis)...")
+    print(" Buscando e Sincronizando Planilhas do Drive...")
     
     planilhas = []
     page_token = None
@@ -270,28 +353,47 @@ def obter_todos_leads_eko(force_refresh=False):
         print(f" ❌ ERRO ao listar arquivos do Drive: {e}")
         return []
     
-    print(f" 📌 Total de planilhas encontradas no Drive: {len(planilhas)}")
-    print(" ⚡ Processando com 4 conexões simultâneas e re-tentativas automáticas...")
+    print(f" 📌 Total de planilhas: {len(planilhas)}")
     
     todos_leads = []
-    
-    # 4 Workers para garantia de estabilidade total na rede
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(processar_item_planilha, item) for item in planilhas]
         for future in as_completed(futures):
             resultado = future.result()
             todos_leads.extend(resultado)
 
+    # Salva cache local (/tmp ou disco)
     try:
         with open(CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump(todos_leads, f, ensure_ascii=False, indent=2)
-        print(f" 💾 Cache salvo com sucesso em '{CACHE_FILE}'!")
+        print(f" 💾 Cache local salvo!")
     except Exception as e:
-        print(f" ⚠️ Erro ao salvar cache: {e}")
+        print(f" ⚠️ Erro ao salvar cache local: {e}")
 
-    print(f"\n ✅ TOTAL GERAL DE LEADS CARREGADOS: {len(todos_leads)}")
+    # Salva cache no Drive para persistência entre deploys (Vercel)
+    salvar_cache_no_drive(todos_leads)
+
+    print(f"\n ✅ TOTAL: {len(todos_leads)} leads carregados.")
     print("="*55 + "\n")
     return todos_leads
+
+def atualizar_lead_no_cache(sheet_id, nome_aba, linha, coluna_nome, novo_valor):
+    """Atualiza um lead no cache local e persiste no Drive."""
+    if not os.path.exists(CACHE_FILE):
+        return
+    try:
+        with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+            leads_cache = json.load(f)
+        for lead in leads_cache:
+            if (str(lead.get('sheet_id')) == str(sheet_id)
+                    and str(lead.get('aba')) == str(nome_aba)
+                    and str(lead.get('linha_id')) == str(linha)):
+                lead[coluna_nome] = novo_valor
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(leads_cache, f, ensure_ascii=False, indent=2)
+        salvar_cache_no_drive(leads_cache)
+    except Exception as e:
+        print(f"Erro ao atualizar cache: {e}")
 
 def atualizar_lead_tempo_real(sheet_id, nome_aba, linha, coluna_nome, novo_valor):
     gclient, drive_service = criar_servicos()
@@ -309,17 +411,7 @@ def atualizar_lead_tempo_real(sheet_id, nome_aba, linha, coluna_nome, novo_valor
     if not col_idx:
         return False
 
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
-                leads_cache = json.load(f)
-            for lead in leads_cache:
-                if str(lead.get('sheet_id')) == str(sheet_id) and str(lead.get('aba')) == str(nome_aba) and str(lead.get('linha_id')) == str(linha):
-                    lead[coluna_nome] = novo_valor
-            with open(CACHE_FILE, 'w', encoding='utf-8') as f:
-                json.dump(leads_cache, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"Erro ao atualizar cache local: {e}")
+    atualizar_lead_no_cache(sheet_id, nome_aba, linha, coluna_nome, novo_valor)
 
     try:
         res = drive_service.files().get(fileId=sheet_id, fields='mimeType', supportsAllDrives=True).execute()

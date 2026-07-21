@@ -1,22 +1,25 @@
 import sys
 import os
+import json
 
 # Ajusta encodificação do stdout para UTF-8 no Windows
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from flask import Flask, render_template, request, jsonify, redirect, url_for
-from google_sheets import obter_todos_leads_eko, atualizar_lead_tempo_real, ESTADOS_MAP
-from database import importar_planilhas_pasta, obter_todos_leads_db, adicionar_lead_db, buscar_cidades_ibge
+from google_sheets import obter_todos_leads_eko, atualizar_lead_tempo_real, ESTADOS_MAP, CACHE_FILE
+from database import importar_planilhas_pasta, obter_todos_leads_db, adicionar_lead_db, atualizar_lead_db, buscar_cidades_ibge
 
 app = Flask(__name__)
-app.secret_key = "crm_prospeccao_secret_key"
-
-# Adicione esta linha no início do app.py:
-CACHE_FILE = "/tmp/cache_leads.json"
+app.secret_key = os.environ.get("SECRET_KEY", "crm_prospeccao_secret_key")
 
 # Variável global para guardar os dados na memória RAM
 LEADS_MEMORIA = []
+
+def normalizar_cidade(cidade):
+    if not cidade:
+        return ''
+    return str(cidade).strip().lstrip('★').strip()
 
 def carregar_dados_iniciais(force_refresh=False):
     global LEADS_MEMORIA
@@ -40,8 +43,6 @@ def carregar_dados_iniciais(force_refresh=False):
     LEADS_MEMORIA = leads_drive + leads_db
     print(f"[OK] Total unificado na memória: {len(LEADS_MEMORIA)} leads.")
     return LEADS_MEMORIA
-
-import json
 
 def obter_cidades_por_uf(leads):
     cidades_map = {}
@@ -135,7 +136,7 @@ def index():
     busca_raw = request.args.get('q', request.args.get('busca', '')).strip()
     busca_termo = busca_raw.lower()
     estado_filtro = request.args.get('uf', request.args.get('estado', '')).strip()
-    cidade_filtro = request.args.get('cidade', '').strip()
+    cidade_filtro = normalizar_cidade(request.args.get('cidade', ''))
     tipo_filtro = request.args.get('tipo', '').strip()
     status_filtro = request.args.get('status', '').strip()
     potencial_filtro = request.args.get('potencial', '').strip()
@@ -155,8 +156,8 @@ def index():
 
     if cidade_filtro:
         leads_filtrados = [
-            l for l in leads_filtrados 
-            if l.get('cidade') == cidade_filtro or l.get('aba') == cidade_filtro
+            l for l in leads_filtrados
+            if normalizar_cidade(l.get('cidade') or l.get('aba') or '') == cidade_filtro
         ]
 
     if tipo_filtro:
@@ -221,11 +222,12 @@ def atualizar():
         if str(lead.get('sheet_id')) == str(sheet_id) and str(lead.get('aba')) == str(nome_aba) and str(lead.get('linha_id')) == str(linha):
             lead[coluna] = novo_valor
 
-    # Atualiza no Google Drive se for do Drive
+    # Atualiza no Google Drive ou SQLite conforme a origem
     if sheet_id and not str(sheet_id).startswith('db_'):
         sucesso = atualizar_lead_tempo_real(sheet_id, nome_aba, linha, coluna, novo_valor)
     else:
-        sucesso = True # Registro local atualizado em memória
+        lead_id = str(sheet_id).replace('db_', '') if sheet_id else linha
+        sucesso = atualizar_lead_db(lead_id, coluna, novo_valor)
         
     return jsonify({"sucesso": sucesso})
 

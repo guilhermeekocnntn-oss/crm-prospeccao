@@ -15,6 +15,22 @@ def get_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+COLUNAS_DB = {
+    "empresa": "empresa",
+    "tipo": "tipo",
+    "bairro": "bairro",
+    "telefone": "telefone",
+    "decisor": "decisor",
+    "instagram_site": "instagram_site",
+    "marca_propria": "marca_propria",
+    "potencial": "potencial",
+    "status": "status",
+    "data_ultimo": "data_ultimo_contato",
+    "data_retorno": "data_retorno",
+    "resumo": "resumo_conversa",
+    "cidade": "cidade",
+}
+
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
@@ -94,19 +110,28 @@ def importar_planilhas_pasta(pasta_origem):
                         for row in ws.iter_rows(min_row=2, values_only=True):
                             empresa = row[0]
                             
-                            # Se a coluna empresa estiver preenchida
-                            if empresa and str(empresa).strip():
-                                cursor.execute('''
-                                    INSERT INTO leads (uf, cidade, empresa, tipo, bairro, telefone, decisor, instagram_site, marca_propria, potencial, status, data_ultimo_contato, data_retorno, resumo_conversa)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                ''', (
-                                    uf, cidade, str(empresa).strip(),
-                                    str(row[1] or ''), str(row[2] or ''), str(row[3] or ''),
-                                    str(row[4] or ''), str(row[5] or ''), str(row[6] or ''),
-                                    str(row[7] or 'Médio'), str(row[8] or 'A Ligar (Novo)'),
-                                    str(row[9] or ''), str(row[10] or ''), str(row[11] or '')
-                                ))
-                                total_importados += 1
+                            empresa_str = str(empresa).strip()
+                            if not empresa_str:
+                                continue
+
+                            cursor.execute(
+                                "SELECT id FROM leads WHERE uf = ? AND cidade = ? AND LOWER(empresa) = LOWER(?)",
+                                (uf, cidade, empresa_str)
+                            )
+                            if cursor.fetchone():
+                                continue
+
+                            cursor.execute('''
+                                INSERT INTO leads (uf, cidade, empresa, tipo, bairro, telefone, decisor, instagram_site, marca_propria, potencial, status, data_ultimo_contato, data_retorno, resumo_conversa)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ''', (
+                                uf, cidade, empresa_str,
+                                str(row[1] or ''), str(row[2] or ''), str(row[3] or ''),
+                                str(row[4] or ''), str(row[5] or ''), str(row[6] or ''),
+                                str(row[7] or 'Médio'), str(row[8] or 'A Ligar (Novo)'),
+                                str(row[9] or ''), str(row[10] or ''), str(row[11] or '')
+                            ))
+                            total_importados += 1
                 except Exception as e:
                     print(f"Erro ao ler arquivo {file}: {e}")
                     
@@ -133,6 +158,7 @@ def obter_todos_leads_db():
             "pasta": "SQLite Local",
             "macroregiao": r['cidade'],
             "aba": r['cidade'],
+            "cidade": r['cidade'],
             "empresa": r['empresa'],
             "tipo": r['tipo'] or '',
             "bairro": r['bairro'] or '',
@@ -156,7 +182,7 @@ def adicionar_lead_db(dados):
     cursor = conn.cursor()
     
     uf = (dados.get('uf') or 'SP').strip().upper()
-    cidade = (dados.get('cidade') or 'Geral').strip()
+    cidade = (dados.get('cidade') or 'Geral').strip().lstrip('★').strip()
     empresa = (dados.get('empresa') or '').strip()
     tipo = (dados.get('tipo') or '').strip()
     bairro = (dados.get('bairro') or '').strip()
@@ -202,7 +228,22 @@ def adicionar_lead_db(dados):
         "resumo": resumo
     }
 
+def atualizar_lead_db(lead_id, coluna, valor):
+    """Atualiza um campo de um lead local no SQLite."""
+    col_db = COLUNAS_DB.get(coluna)
+    if not col_db:
+        return False
+
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE leads SET {col_db} = ? WHERE id = ?", (valor, lead_id))
+    atualizado = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return atualizado
+
 if __name__ == "__main__":
     init_db()
     print("Banco de dados pronto!")
-
+

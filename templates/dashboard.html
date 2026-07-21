@@ -321,6 +321,10 @@
 <script>
 const CIDADES_POR_UF = {{ cidades_json | safe }};
 
+function normalizarCidade(c) {
+    return (c || '').replace(/^★\s*/, '').trim();
+}
+
 async function carregarCidadesParaUF(uf) {
     if (!uf) return [];
     if (CIDADES_POR_UF[uf] && CIDADES_POR_UF[uf].length > 0) {
@@ -349,9 +353,9 @@ async function atualizarCidadesFiltro(ufSelecionada, cidadeSelecionada = '{{ f_c
         Object.values(CIDADES_POR_UF).forEach(lista => lista.forEach(c => todasCidades.add(c)));
         Array.from(todasCidades).sort().forEach(cidade => {
             const opt = document.createElement('option');
-            opt.value = cidade;
+            opt.value = normalizarCidade(cidade);
             opt.textContent = cidade;
-            if (cidade === cidadeSelecionada) opt.selected = true;
+            if (normalizarCidade(cidade) === normalizarCidade(cidadeSelecionada)) opt.selected = true;
             selectCidade.appendChild(opt);
         });
         return;
@@ -363,9 +367,9 @@ async function atualizarCidadesFiltro(ufSelecionada, cidadeSelecionada = '{{ f_c
     selectCidade.innerHTML = '<option value="">Todas as Cidades</option>';
     cidades.forEach(cidade => {
         const opt = document.createElement('option');
-        opt.value = cidade;
+        opt.value = normalizarCidade(cidade);
         opt.textContent = cidade;
-        if (cidade === cidadeSelecionada) opt.selected = true;
+        if (normalizarCidade(cidade) === normalizarCidade(cidadeSelecionada)) opt.selected = true;
         selectCidade.appendChild(opt);
     });
 }
@@ -380,7 +384,7 @@ async function atualizarCidadesModal(ufSelecionada) {
     selectCidade.innerHTML = '';
     cidades.forEach(cidade => {
         const opt = document.createElement('option');
-        opt.value = cidade;
+        opt.value = normalizarCidade(cidade);
         opt.textContent = cidade;
         selectCidade.appendChild(opt);
     });
