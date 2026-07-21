@@ -1,0 +1,435 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<!-- Cards com Métricas -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+    <div class="bg-darkcard border border-zinc-800 p-5 rounded-xl shadow-md flex items-center justify-between">
+        <div>
+            <p class="text-xs text-zinc-400 font-semibold uppercase">Total de Leads</p>
+            <h3 class="text-3xl font-bold mt-1 text-white">{{ total_leads }}</h3>
+        </div>
+        <div class="p-3 bg-zinc-800 rounded-lg text-accent">
+            <i data-lucide="users" class="w-8 h-8"></i>
+        </div>
+    </div>
+
+    <div class="bg-darkcard border border-zinc-800 p-5 rounded-xl shadow-md flex items-center justify-between">
+        <div>
+            <p class="text-xs text-zinc-400 font-semibold uppercase">Agendados / Retornos</p>
+            <h3 class="text-3xl font-bold mt-1 text-amber-400">{{ total_agendados }}</h3>
+        </div>
+        <div class="p-3 bg-zinc-800 rounded-lg text-amber-400">
+            <i data-lucide="calendar" class="w-8 h-8"></i>
+        </div>
+    </div>
+
+    <div class="bg-darkcard border border-zinc-800 p-5 rounded-xl shadow-md flex items-center justify-between">
+        <div>
+            <p class="text-xs text-zinc-400 font-semibold uppercase">Clientes Fechados</p>
+            <h3 class="text-3xl font-bold mt-1 text-emerald-400">{{ total_fechados }}</h3>
+        </div>
+        <div class="p-3 bg-zinc-800 rounded-lg text-emerald-400">
+            <i data-lucide="check-circle" class="w-8 h-8"></i>
+        </div>
+    </div>
+</div>
+
+<!-- Sincronizar com Planilhas do Excel -->
+<div class="bg-darkcard border border-zinc-800 p-4 rounded-xl mb-6 flex flex-col md:flex-row items-center justify-between gap-4">
+    <div class="flex items-center space-x-3">
+        <div class="p-2 bg-emerald-950 text-emerald-400 border border-emerald-800 rounded-lg">
+            <i data-lucide="file-spreadsheet" class="w-5 h-5"></i>
+        </div>
+        <div>
+            <h4 class="font-bold text-sm text-white">Importar Planilhas Excel Locais</h4>
+            <p class="text-xs text-zinc-400">Digite o caminho da pasta para ler e sincronizar planilhas .xlsx no CRM</p>
+        </div>
+    </div>
+    
+    <form action="/importar" method="POST" class="flex w-full md:w-auto space-x-2">
+        <input type="text" name="caminho_pasta" placeholder="Ex: C:\MeusProjetos\Planilhas" required class="bg-darkinput border border-zinc-700 text-white rounded-lg px-3 py-1.5 text-sm w-full md:w-80 focus:border-accent focus:outline-none">
+        <button type="submit" class="bg-accent hover:bg-accenthover text-white px-4 py-1.5 rounded-lg text-sm font-bold transition flex items-center whitespace-nowrap cursor-pointer">
+            <i data-lucide="refresh-cw" class="w-4 h-4 mr-1.5"></i> Importar
+        </button>
+    </form>
+</div>
+
+<!-- BARRA DE FILTROS -->
+<div class="bg-darkcard border border-zinc-800 p-4 rounded-xl mb-6 shadow-md">
+    <form method="GET" action="/" class="grid grid-cols-1 md:grid-cols-7 gap-3 items-end">
+        <div>
+            <label class="block text-xs font-semibold text-zinc-400 mb-1">Buscar Nome / Tel:</label>
+            <input type="text" name="q" value="{{ f_busca }}" placeholder="Digite para buscar..." class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2 text-sm focus:border-accent focus:outline-none">
+        </div>
+
+        <div>
+            <label class="block text-xs font-semibold text-zinc-400 mb-1">Estado (UF):</label>
+            <select name="uf" id="select-filtro-uf" onchange="atualizarCidadesFiltro(this.value)" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2 text-sm focus:border-accent focus:outline-none cursor-pointer">
+                <option value="">Todos os Estados</option>
+                {% for sigla, nome in estados.items() %}
+                    <option value="{{ sigla }}" {% if f_uf == sigla %}selected{% endif %}>{{ sigla }} - {{ nome }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div>
+            <label class="block text-xs font-semibold text-zinc-400 mb-1">Cidade (Aba):</label>
+            <select name="cidade" id="select-filtro-cidade" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2 text-sm focus:border-accent focus:outline-none cursor-pointer">
+                <option value="">Todas as Cidades</option>
+            </select>
+        </div>
+
+        <div>
+            <label class="block text-xs font-semibold text-zinc-400 mb-1">Tipo / Categoria:</label>
+            <select name="tipo" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2 text-sm focus:border-accent focus:outline-none cursor-pointer">
+                <option value="">Todos os Tipos</option>
+                {% for tp in tipos %}
+                    <option value="{{ tp }}" {% if f_tipo == tp %}selected{% endif %}>{{ tp }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div>
+            <label class="block text-xs font-semibold text-zinc-400 mb-1">Status:</label>
+            <select name="status" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2 text-sm focus:border-accent focus:outline-none cursor-pointer">
+                <option value="">Todos os Status</option>
+                {% for st in status_lista %}
+                    <option value="{{ st }}" {% if f_status == st %}selected{% endif %}>{{ st }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div>
+            <label class="block text-xs font-semibold text-zinc-400 mb-1">Potencial:</label>
+            <select name="potencial" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2 text-sm focus:border-accent focus:outline-none cursor-pointer">
+                <option value="">Todos</option>
+                <option value="Alto" {% if f_potencial == 'Alto' %}selected{% endif %}>Alto</option>
+                <option value="Médio" {% if f_potencial == 'Médio' %}selected{% endif %}>Médio</option>
+                <option value="Baixo" {% if f_potencial == 'Baixo' %}selected{% endif %}>Baixo</option>
+            </select>
+        </div>
+
+        <div class="flex space-x-2">
+            <button type="submit" class="w-full bg-accent hover:bg-accenthover text-white font-bold py-2 px-3 rounded-lg text-sm transition flex items-center justify-center cursor-pointer">
+                <i data-lucide="filter" class="w-4 h-4 mr-1"></i> Filtrar
+            </button>
+            <a href="/" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold py-2 px-3 rounded-lg text-sm transition flex items-center justify-center">
+                <i data-lucide="x" class="w-4 h-4"></i>
+            </a>
+        </div>
+    </form>
+</div>
+
+<!-- Tabela de Leads -->
+<div class="bg-darkcard border border-zinc-800 rounded-xl shadow-md overflow-hidden">
+    <div class="p-4 border-b border-zinc-800 flex justify-between items-center flex-wrap gap-2">
+        <h3 class="font-bold text-white flex items-center">
+            <i data-lucide="list" class="w-5 h-5 mr-2 text-accent"></i> Lista de Leads
+        </h3>
+        <div class="flex items-center space-x-3">
+            <span class="text-xs text-zinc-400">Exibindo {{ leads|length }} de {{ total_leads }} leads</span>
+            <button onclick="abrirModalNovoLead()" class="bg-accent hover:bg-accenthover text-white text-xs font-bold px-3 py-1.5 rounded-lg flex items-center transition cursor-pointer">
+                <i data-lucide="plus-circle" class="w-4 h-4 mr-1.5"></i> Novo Lead
+            </button>
+        </div>
+    </div>
+    
+    <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm text-zinc-300">
+            <thead class="bg-zinc-900 text-zinc-400 uppercase text-xs">
+                <tr>
+                    <th class="p-3">Empresa</th>
+                    <th class="p-3">UF / Cidade</th>
+                    <th class="p-3">Tipo</th>
+                    <th class="p-3">Potencial</th>
+                    <th class="p-3">Status</th>
+                    <th class="p-3 text-center">Ações</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-zinc-800">
+                {% for lead in leads %}
+                <tr class="hover:bg-zinc-800/50 transition">
+                    <td class="p-3 font-semibold text-white">
+                        <div>{{ lead.empresa }}</div>
+                        {% if lead.bairro %}<div class="text-xs text-zinc-500 font-normal">{{ lead.bairro }}</div>{% endif %}
+                    </td>
+                    <td class="p-3 font-medium text-white">
+                        {{ lead.uf }} - {{ lead.cidade or lead.aba or 'Geral' }}
+                    </td>
+                    <td class="p-3"><span class="bg-zinc-800 px-2 py-1 rounded text-xs text-zinc-300">{{ lead.tipo or '-' }}</span></td>
+                    <td class="p-3">
+                        <select onchange="alterarCampoLead('{{ lead.sheet_id }}', '{{ lead.aba }}', '{{ lead.linha_id }}', 'potencial', this.value)"
+                            class="bg-zinc-800 text-xs font-bold rounded-lg p-1 border border-zinc-700 focus:outline-none cursor-pointer
+                            {% if lead.potencial == 'Alto' %} text-emerald-400
+                            {% elif lead.potencial == 'Médio' %} text-amber-400
+                            {% else %} text-zinc-400 {% endif %}">
+                            <option value="Alto" {% if lead.potencial == 'Alto' %}selected{% endif %} class="text-emerald-400">Alto</option>
+                            <option value="Médio" {% if lead.potencial == 'Médio' %}selected{% endif %} class="text-amber-400">Médio</option>
+                            <option value="Baixo" {% if lead.potencial == 'Baixo' %}selected{% endif %} class="text-zinc-400">Baixo</option>
+                        </select>
+                    </td>
+                    <td class="p-3">
+                        <select onchange="alterarCampoLead('{{ lead.sheet_id }}', '{{ lead.aba }}', '{{ lead.linha_id }}', 'status', this.value)"
+                            class="bg-zinc-800 text-xs font-semibold rounded-lg p-1 border border-zinc-700 focus:outline-none cursor-pointer text-zinc-200">
+                            {% for st in status_lista %}
+                                <option value="{{ st }}" {% if lead.status == st %}selected{% endif %}>{{ st }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td class="p-3 text-center">
+                        {% if lead.telefone and lead.telefone != 'None' and lead.telefone != '' %}
+                        <a href="https://wa.me/{{ lead.telefone | replace(' ', '') | replace('-', '') | replace('(', '') | replace(')', '') }}" target="_blank" class="inline-flex items-center px-3 py-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs font-bold transition">
+                            <i data-lucide="message-square" class="w-3.5 h-3.5 mr-1"></i> WhatsApp
+                        </a>
+                        {% else %}
+                        <span class="text-zinc-500 text-xs">Sem tel</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="p-6 text-center text-zinc-500">Nenhum lead encontrado com esses filtros.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- MODAL NOVO LEAD -->
+<div id="modal-novo-lead" class="fixed inset-0 bg-black/70 backdrop-blur-sm hidden flex items-center justify-center p-4 z-50">
+    <div class="bg-darkcard border border-zinc-800 rounded-xl shadow-2xl max-w-2xl w-full p-6 relative animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto">
+        <div class="flex justify-between items-center border-b border-zinc-800 pb-3 mb-4 sticky top-0 bg-darkcard z-10">
+            <h3 class="font-bold text-lg text-white flex items-center">
+                <i data-lucide="user-plus" class="w-5 h-5 mr-2 text-accent"></i> Cadastrar Novo Lead (Todos os Campos da Planilha)
+            </h3>
+            <button onclick="fecharModalNovoLead()" class="text-zinc-400 hover:text-white transition cursor-pointer">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+        </div>
+
+        <form action="/adicionar_lead" method="POST" class="space-y-4">
+            <div>
+                <label class="block text-xs font-semibold text-zinc-300 mb-1">Nome da Empresa / Razão Social *</label>
+                <input type="text" name="empresa" required placeholder="Ex: Padaria Central LTDA" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none">
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">Estado (UF)</label>
+                    <select name="uf" id="select-modal-uf" onchange="atualizarCidadesModal(this.value)" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none cursor-pointer">
+                        {% for sigla, nome in estados.items() %}
+                            <option value="{{ sigla }}" {% if sigla == 'SP' %}selected{% endif %}>{{ sigla }} - {{ nome }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">Cidade (Aba da Planilha)</label>
+                    <select name="cidade" id="select-modal-cidade" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none cursor-pointer">
+                        <option value="">Selecione a Cidade</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">Bairro / Região</label>
+                    <input type="text" name="bairro" placeholder="Ex: Centro" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">Tipo / Categoria</label>
+                    <select name="tipo" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none cursor-pointer">
+                        {% for tp in tipos %}
+                            <option value="{{ tp }}">{{ tp }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">Telefone / WhatsApp</label>
+                    <input type="text" name="telefone" placeholder="Ex: (11) 99999-8888" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">Decisor / Sócio</label>
+                    <input type="text" name="decisor" placeholder="Ex: Carlos Oliveira" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none">
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">Instagram / Site / Redes</label>
+                    <input type="text" name="instagram_site" placeholder="Ex: @empresa ou www.empresa.com.br" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">Possui Marca Própria?</label>
+                    <select name="marca_propria" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none cursor-pointer">
+                        <option value="Não" selected>Não</option>
+                        <option value="Sim">Sim</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">Potencial</label>
+                    <select name="potencial" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none cursor-pointer">
+                        <option value="Alto">Alto</option>
+                        <option value="Médio" selected>Médio</option>
+                        <option value="Baixo">Baixo</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">Status Inicial</label>
+                    <select name="status" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none cursor-pointer">
+                        {% for st in status_lista %}
+                            <option value="{{ st }}" {% if st == 'A Ligar (Novo)' %}selected{% endif %}>{{ st }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">Data do Último Contato</label>
+                    <input type="text" name="data_ultimo" placeholder="Ex: 21/07/2026" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">Data de Retorno / Agendamento</label>
+                    <input type="text" name="data_retorno" placeholder="Ex: 28/07/2026" class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none">
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold text-zinc-300 mb-1">Resumo / Objeção / Observações</label>
+                <textarea name="resumo" rows="2" placeholder="Notas sobre o primeiro contato ou observações..." class="w-full bg-darkinput border border-zinc-700 text-white rounded-lg p-2.5 text-sm focus:border-accent focus:outline-none"></textarea>
+            </div>
+
+            <div class="flex justify-end space-x-3 pt-3 border-t border-zinc-800">
+                <button type="button" onclick="fecharModalNovoLead()" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold px-4 py-2 rounded-lg text-sm transition cursor-pointer">
+                    Cancelar
+                </button>
+                <button type="submit" class="bg-accent hover:bg-accenthover text-white font-bold px-5 py-2 rounded-lg text-sm transition flex items-center cursor-pointer">
+                    <i data-lucide="check" class="w-4 h-4 mr-1.5"></i> Salvar Lead
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+const CIDADES_POR_UF = {{ cidades_json | safe }};
+
+async function carregarCidadesParaUF(uf) {
+    if (!uf) return [];
+    if (CIDADES_POR_UF[uf] && CIDADES_POR_UF[uf].length > 0) {
+        return CIDADES_POR_UF[uf];
+    }
+    try {
+        const res = await fetch('/api/cidades/' + uf);
+        const data = await res.json();
+        if (data.cidades && data.cidades.length > 0) {
+            CIDADES_POR_UF[uf] = data.cidades; // Salva no cache local do JS
+            return data.cidades;
+        }
+    } catch (e) {
+        console.error('Erro ao buscar cidades:', e);
+    }
+    return ['Geral'];
+}
+
+async function atualizarCidadesFiltro(ufSelecionada, cidadeSelecionada = '{{ f_cidade }}') {
+    const selectCidade = document.getElementById('select-filtro-cidade');
+    if (!selectCidade) return;
+    
+    if (!ufSelecionada) {
+        selectCidade.innerHTML = '<option value="">Todas as Cidades</option>';
+        const todasCidades = new Set();
+        Object.values(CIDADES_POR_UF).forEach(lista => lista.forEach(c => todasCidades.add(c)));
+        Array.from(todasCidades).sort().forEach(cidade => {
+            const opt = document.createElement('option');
+            opt.value = cidade;
+            opt.textContent = cidade;
+            if (cidade === cidadeSelecionada) opt.selected = true;
+            selectCidade.appendChild(opt);
+        });
+        return;
+    }
+
+    selectCidade.innerHTML = '<option value="">Carregando cidades...</option>';
+    const cidades = await carregarCidadesParaUF(ufSelecionada);
+    
+    selectCidade.innerHTML = '<option value="">Todas as Cidades</option>';
+    cidades.forEach(cidade => {
+        const opt = document.createElement('option');
+        opt.value = cidade;
+        opt.textContent = cidade;
+        if (cidade === cidadeSelecionada) opt.selected = true;
+        selectCidade.appendChild(opt);
+    });
+}
+
+async function atualizarCidadesModal(ufSelecionada) {
+    const selectCidade = document.getElementById('select-modal-cidade');
+    if (!selectCidade) return;
+    
+    selectCidade.innerHTML = '<option value="">Carregando cidades...</option>';
+    const cidades = await carregarCidadesParaUF(ufSelecionada);
+    
+    selectCidade.innerHTML = '';
+    cidades.forEach(cidade => {
+        const opt = document.createElement('option');
+        opt.value = cidade;
+        opt.textContent = cidade;
+        selectCidade.appendChild(opt);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const ufFiltro = document.getElementById('select-filtro-uf');
+    if (ufFiltro) {
+        atualizarCidadesFiltro(ufFiltro.value, '{{ f_cidade }}');
+    }
+    
+    const ufModal = document.getElementById('select-modal-uf');
+    if (ufModal) {
+        atualizarCidadesModal(ufModal.value);
+    }
+});
+
+function abrirModalNovoLead() {
+    document.getElementById('modal-novo-lead').classList.remove('hidden');
+    const ufModal = document.getElementById('select-modal-uf');
+    if (ufModal) {
+        atualizarCidadesModal(ufModal.value);
+    }
+}
+
+function fecharModalNovoLead() {
+    document.getElementById('modal-novo-lead').classList.add('hidden');
+}
+
+async function alterarCampoLead(sheetId, aba, linhaId, coluna, valor) {
+    try {
+        const res = await fetch('/atualizar_lead', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                sheet_id: sheetId,
+                aba: aba,
+                linha_id: linhaId,
+                coluna: coluna,
+                valor: valor
+            })
+        });
+        const data = await res.json();
+        if (!data.sucesso) {
+            console.warn('Falha ao sincronizar alteração no Google Drive.');
+        }
+    } catch (e) {
+        console.error('Erro ao atualizar lead:', e);
+    }
+}
+</script>
+{% endblock %}

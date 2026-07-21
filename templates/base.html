@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRM Prospecção - Dark Mode</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        darkbg: '#181818',
+                        darkcard: '#242424',
+                        darkinput: '#2D2D2D',
+                        accent: '#1d7253',
+                        accenthover: '#258f68',
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Ícones Lucide -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body class="bg-darkbg text-white min-h-screen font-sans flex flex-col">
+
+    <!-- Header Principal -->
+    <header class="bg-darkcard border-b border-zinc-800 px-6 py-4 flex justify-between items-center shadow-lg">
+        <div class="flex items-center space-x-3">
+            <div class="bg-accent p-2 rounded-lg text-white">
+                <i data-lucide="target" class="w-6 h-6"></i>
+            </div>
+            <div>
+                <h1 class="font-bold text-lg leading-none">CRM Prospecção</h1>
+                <span class="text-xs text-zinc-400">Gestão de Leads & IBGE</span>
+            </div>
+        </div>
+        <div class="flex items-center space-x-3">
+            <button onclick="sincronizarDrive()" id="btn-sync-drive" class="text-xs bg-zinc-800 hover:bg-zinc-700 px-3 py-1.5 rounded-lg text-zinc-300 border border-zinc-700 transition flex items-center cursor-pointer">
+                <i data-lucide="refresh-cw" id="icon-sync" class="w-3.5 h-3.5 mr-1.5"></i> Sincronizar Drive
+            </button>
+            <div class="text-xs bg-zinc-800 px-3 py-1.5 rounded-full text-zinc-300 border border-zinc-700 hidden sm:block">
+                🟢 Vendedor Único (Modo Local)
+            </div>
+        </div>
+    </header>
+
+    <!-- Conteúdo da Página -->
+    <main class="flex-1 p-6 max-w-7xl mx-auto w-full">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script>
+        lucide.createIcons();
+
+        async function sincronizarDrive() {
+            const btn = document.getElementById('btn-sync-drive');
+            const icon = document.getElementById('icon-sync');
+            btn.disabled = true;
+            btn.classList.add('opacity-50', 'cursor-not-allowed');
+            icon.classList.add('animate-spin');
+            
+            try {
+                const res = await fetch('/sincronizar_drive');
+                const data = await res.json();
+                if (data.status === 'sucesso') {
+                    window.location.reload();
+                } else {
+                    alert('Erro ao sincronizar com Google Drive.');
+                }
+            } catch (e) {
+                console.error(e);
+                alert('Falha na comunicação com o servidor.');
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('opacity-50', 'cursor-not-allowed');
+                icon.classList.remove('animate-spin');
+            }
+        }
+    </script>
+</body>
+</html>
