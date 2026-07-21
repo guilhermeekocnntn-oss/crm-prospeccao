@@ -12,6 +12,9 @@ from database import importar_planilhas_pasta, obter_todos_leads_db, adicionar_l
 app = Flask(__name__)
 app.secret_key = "crm_prospeccao_secret_key"
 
+# Adicione esta linha no início do app.py:
+CACHE_FILE = "/tmp/cache_leads.json"
+
 # Variável global para guardar os dados na memória RAM
 LEADS_MEMORIA = []
 
