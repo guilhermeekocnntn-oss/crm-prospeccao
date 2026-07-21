@@ -19,19 +19,21 @@ def carregar_dados_iniciais(force_refresh=False):
     global LEADS_MEMORIA
     print("[INFO] Carregando dados de leads para a memória RAM...")
     
-    try:
-        leads_drive = obter_todos_leads_eko(force_refresh=force_refresh)
-    except Exception as e:
-        print(f"[AVISO] Erro ao carregar dados do Google Drive: {e}")
-        leads_drive = []
-
+    # 1. Carrega o banco SQLite local instantaneamente (milissegundos)
+    leads_db = []
     try:
         leads_db = obter_todos_leads_db()
     except Exception as e:
         print(f"[AVISO] Erro ao carregar dados do SQLite: {e}")
-        leads_db = []
+
+    # 2. No Vercel, lê o cache instantâneo se existir. Só faz varredura completa se force_refresh=True ou local.
+    leads_drive = []
+    if os.path.exists(CACHE_FILE) or force_refresh or not os.environ.get("VERCEL"):
+        try:
+            leads_drive = obter_todos_leads_eko(force_refresh=force_refresh)
+        except Exception as e:
+            print(f"[AVISO] Erro ao carregar dados do Google Drive: {e}")
     
-    # Unifica mantendo a ordem e evitando duplicatas simples
     LEADS_MEMORIA = leads_drive + leads_db
     print(f"[OK] Total unificado na memória: {len(LEADS_MEMORIA)} leads.")
     return LEADS_MEMORIA
