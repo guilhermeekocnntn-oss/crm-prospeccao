@@ -241,40 +241,50 @@ def atualizar():
 @app.route('/adicionar_lead', methods=['POST'])
 def adicionar_lead():
     try:
+        # Tenta ler como JSON ou dados de formulário
+        data = request.json if request.is_json else request.form
+
+        cidade_valor = data.get('cidade') or data.get('aba') or 'Geral'
+
         dados_lead = {
-            "uf": request.form.get('uf', 'OUTROS'),
-            "uf_nome": request.form.get('uf_nome', 'Geral'),
-            "pasta": request.form.get('pasta', 'Geral'),
-            "macroregiao": request.form.get('macroregiao', ''),
-            "aba": request.form.get('aba', ''),
-            "cidade": request.form.get('aba', ''),
-            "empresa": request.form.get('empresa', ''),
-            "tipo": request.form.get('tipo', ''),
-            "bairro": request.form.get('bairro', ''),
-            "telefone": request.form.get('telefone', ''),
-            "decisor": request.form.get('decisor', ''),
-            "instagram_site": request.form.get('instagram_site', ''),
-            "marca_propria": request.form.get('marca_propria', ''),
-            "potencial": request.form.get('potencial', 'Médio'),
-            "status": request.form.get('status', 'A Ligar (Novo)'),
-            "data_ultimo": request.form.get('data_ultimo', ''),
-            "data_retorno": request.form.get('data_retorno', ''),
-            "resumo": request.form.get('resumo', '')
+            "uf": data.get('uf', 'OUTROS'),
+            "uf_nome": data.get('uf_nome', 'Geral'),
+            "pasta": data.get('pasta', 'Geral'),
+            "macroregiao": data.get('macroregiao', 'Geral'),
+            "aba": cidade_valor,
+            "cidade": cidade_valor,
+            "empresa": data.get('empresa', ''),
+            "tipo": data.get('tipo', ''),
+            "bairro": data.get('bairro', ''),
+            "telefone": data.get('telefone', ''),
+            "decisor": data.get('decisor', ''),
+            "instagram_site": data.get('instagram_site', ''),
+            "marca_propria": data.get('marca_propria', ''),
+            "potencial": data.get('potencial', 'Médio'),
+            "status": data.get('status', 'A Ligar (Novo)'),
+            "data_ultimo": data.get('data_ultimo', ''),
+            "data_retorno": data.get('data_retorno', ''),
+            "resumo": data.get('resumo', '')
         }
 
         # Envia para a planilha no Drive
         lead_criado = adicionar_novo_lead_no_drive(dados_lead)
 
-        # Adiciona na memória RAM global para os leads não sumirem
+        # Adiciona na memória RAM global
         global LEADS_MEMORIA
         LEADS_MEMORIA.append(lead_criado)
 
-        return jsonify({"success": True, "message": "Lead adicionado e sincronizado com sucesso!", "lead": lead_criado})
+        # Se for envio via HTML tradicional, redireciona de volta para a dashboard
+        if not request.is_json and not request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return redirect(url_for('index'))
+
+        return jsonify({"success": True, "message": "Lead adicionado com sucesso!", "lead": lead_criado})
+
     except Exception as e:
         print("❌ Erro em /adicionar_lead:")
         print(traceback.format_exc())
         return jsonify({"success": False, "error": str(e)}), 500
-
+        
 @app.route('/sincronizar_drive')
 def sincronizar_drive():
     carregar_dados_iniciais(force_refresh=True)
