@@ -8,6 +8,7 @@ import gspread
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
@@ -17,27 +18,83 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CREDENTIALS_PATH = os.path.join(BASE_DIR, "credentials.json")
 
-# Suporte ao sistema de arquivos do Vercel (/tmp)
+# Suporte ao diretório temporário do Vercel (/tmp)
 if os.environ.get("VERCEL"):
     CACHE_FILE = "/tmp/leads_cache.json"
 else:
     CACHE_FILE = os.path.join(BASE_DIR, "leads_cache.json")
 
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
+ESTADOS_MAP = {
+    "AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas",
+    "BA": "Bahia", "CE": "Ceará", "DF": "Distrito Federal", "ES": "Espírito Santo",
+    "GO": "Goiás", "MA": "Maranhão", "MT": "Mato Grosso", "MS": "Mato Grosso do Sul",
+    "MG": "Minas Gerais", "PA": "Pará", "PB": "Paraíba", "PR": "Paraná",
+    "PE": "Pernambuco", "PI": "Piauí", "RJ": "Rio de Janeiro", "RN": "Rio Grande do Norte",
+    "RS": "Rio Grande do Sul", "RO": "Rondônia", "RR": "Roraima", "SC": "Santa Catarina",
+    "SP": "São Paulo", "SE": "Sergipe", "TO": "Tocantins"
+}
+
+folder_cache = {}
+DRIVE_CACHE_FILENAME = "crm_leads_cache.json"
+
+def normalizar(texto):
+    if not texto:
+        return ""
+    nfkd = unicodedata.normalize('NFD', str(texto))
+    return "".join([c for c in nfkd if not unicodedata.combining(c)]).lower().strip()
+
+def criar_servicos():
+    """Conecta ao Google usando GOOGLE_CREDENTIALS do Vercel ou credentials.json local"""
+    creds_json = (
+        os.environ.get("GOOGLE_CREDENTIALS") or 
+        os.environ.get("GOOGLE_CREDENTIALS_JSON") or 
+        os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    )
+    
+    creds = None
+    if creds_json:
+        try:
+            creds_info = json.loads(creds_json)
+            creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+        except Exception as e:
+            print(f"Erro ao decodificar JSON das credenciais na variável de ambiente: {e}")
+    
+    if not creds and os.path.exists(CREDENTIALS_PATH):
+        creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+        
+    if not creds:
+        print("⚠️ Credenciais do Google não encontradas no ambiente nem em arquivo.")
+        return None, None
+
+    try:
+        gclient = gspread.authorize(creds)
+        drive_service = build('drive', 'v3', credentials=creds)
+        return gclient, drive_service
+    except Exception as e:
+        print(f"Erro ao inicializar serviços do Google: {e}")
+        return None, None
+
 def adicionar_novo_lead_no_drive(dados_lead):
     """
-    Busca a planilha no Drive, insere o lead na aba da cidade (ex: Cuiabá)
+    Localiza a planilha no Drive pela macrorregião, insere o lead na aba da cidade
     e atualiza o cache local sem apagar os leads existentes.
     """
     gclient, drive_service = criar_servicos()
-    
+    if not drive_service:
+        raise Exception("Serviços do Google Drive indisponíveis.")
+
     macroregiao = dados_lead.get('macroregiao', '').strip()
-    cidade_aba = dados_lead.get('aba', '').strip() # Ex: "Cuiabá"
+    cidade_aba = dados_lead.get('aba', '').strip()
     
     if not cidade_aba:
         raise ValueError("O nome da cidade/aba é obrigatório.")
 
-    # 1. Buscar a planilha no Drive pela Macrorregião/Nome
-    query = f"(mimeType='application/vnd.google-apps.spreadsheet' or mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') and trashed=false"
+    query = "(mimeType='application/vnd.google-apps.spreadsheet' or mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') and trashed=false"
     results = drive_service.files().list(
         q=query, 
         fields="files(id, name, mimeType)", 
@@ -48,14 +105,13 @@ def adicionar_novo_lead_no_drive(dados_lead):
     files = results.get('files', [])
     target_file = None
 
-    # Tenta achar a planilha que contenha o nome da Macrorregião
     for f in files:
         if normalizar(macroregiao) in normalizar(f['name']) or normalizar(f['name']) in normalizar(macroregiao):
             target_file = f
             break
 
     if not target_file and files:
-        target_file = files[0] # Fallback para a primeira disponível se não achar exata
+        target_file = files[0]
 
     if not target_file:
         raise Exception("Nenhuma planilha correspondente foi encontrada no Google Drive.")
@@ -64,7 +120,6 @@ def adicionar_novo_lead_no_drive(dados_lead):
     mime_type = target_file.get('mimeType', '')
     linha_inserida = None
 
-    # Monta a linha exatamente na ordem das colunas
     nova_linha = [
         dados_lead.get('empresa', ''),
         dados_lead.get('tipo', ''),
@@ -80,9 +135,7 @@ def adicionar_novo_lead_no_drive(dados_lead):
         dados_lead.get('resumo', '')
     ]
 
-    # 2. Escreve no Google Drive (Trata Google Sheets nativo e XLSX)
     if mime_type == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
-        # Planilha Excel .xlsx no Drive
         request = drive_service.files().get_media(fileId=sheet_id)
         fh = io.BytesIO()
         downloader = MediaIoBaseDownload(fh, request)
@@ -93,7 +146,6 @@ def adicionar_novo_lead_no_drive(dados_lead):
 
         wb = openpyxl.load_workbook(fh)
         
-        # Procura a aba da cidade
         aba_encontrada = None
         for sname in wb.sheetnames:
             if normalizar(sname) == normalizar(cidade_aba):
@@ -118,7 +170,6 @@ def adicionar_novo_lead_no_drive(dados_lead):
         drive_service.files().update(fileId=sheet_id, media_body=media, supportsAllDrives=True).execute()
 
     else:
-        # Planilha Nativa do Google Sheets
         sheet = gclient.open_by_key(sheet_id)
         worksheet = None
         
@@ -128,18 +179,16 @@ def adicionar_novo_lead_no_drive(dados_lead):
                 break
 
         if not worksheet:
-            # Cria a aba com o nome da cidade caso não exista
             worksheet = sheet.add_worksheet(title=cidade_aba, rows="100", cols="20")
             worksheet.append_row(["Nome da Empresa", "Tipo", "Bairro", "Telefone", "Decisor", "Instagram/Site", "Marca Própria", "Potencial", "Status", "Data Último", "Data Retorno", "Resumo"])
 
         worksheet.append_row(nova_linha)
         linha_inserida = len(worksheet.get_all_values())
 
-    # 3. Atualiza os identificadores do lead
     dados_lead['sheet_id'] = sheet_id
     dados_lead['linha_id'] = linha_inserida
 
-    # 4. Atualiza o Cache Local SEM apagar os leads antigos
+    # Atualiza o cache local e o cache do Drive
     leads_cache = []
     if os.path.exists(CACHE_FILE):
         try:
@@ -150,39 +199,17 @@ def adicionar_novo_lead_no_drive(dados_lead):
 
     leads_cache.append(dados_lead)
 
-    with open(CACHE_FILE, 'w', encoding='utf-8') as f:
-        json.dump(leads_cache, f, ensure_ascii=False, indent=2)
+    try:
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(leads_cache, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ Aviso: Não foi possível salvar em arquivo local: {e}")
+
+    salvar_cache_no_drive(leads_cache)
 
     return dados_lead
 
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
-
-ESTADOS_MAP = {
-    "AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas",
-    "BA": "Bahia", "CE": "Ceará", "DF": "Distrito Federal", "ES": "Espírito Santo",
-    "GO": "Goiás", "MA": "Maranhão", "MT": "Mato Grosso", "MS": "Mato Grosso do Sul",
-    "MG": "Minas Gerais", "PA": "Pará", "PB": "Paraíba", "PR": "Paraná",
-    "PE": "Pernambuco", "PI": "Piauí", "RJ": "Rio de Janeiro", "RN": "Rio Grande do Norte",
-    "RS": "Rio Grande do Sul", "RO": "Rondônia", "RR": "Roraima", "SC": "Santa Catarina",
-    "SP": "São Paulo", "SE": "Sergipe", "TO": "Tocantins"
-}
-
-folder_cache = {}
-
-# Nome do arquivo de cache JSON armazenado no Google Drive (para persistência no Vercel)
-DRIVE_CACHE_FILENAME = "crm_leads_cache.json"
-
-def normalizar(texto):
-    if not texto:
-        return ""
-    nfkd = unicodedata.normalize('NFD', str(texto))
-    return "".join([c for c in nfkd if not unicodedata.combining(c)]).lower().strip()
-
 def salvar_cache_no_drive(todos_leads):
-    """Salva o cache de leads como arquivo JSON no Google Drive para persistência entre deploys."""
     try:
         _, drive_service = criar_servicos()
         if not drive_service:
@@ -191,7 +218,6 @@ def salvar_cache_no_drive(todos_leads):
         conteudo = json.dumps(todos_leads, ensure_ascii=False, indent=2).encode("utf-8")
         media = MediaIoBaseUpload(io.BytesIO(conteudo), mimetype="application/json", resumable=False)
 
-        # Verifica se o arquivo de cache já existe no Drive
         results = drive_service.files().list(
             q=f"name='{DRIVE_CACHE_FILENAME}' and trashed=false",
             fields="files(id, name)",
@@ -200,22 +226,17 @@ def salvar_cache_no_drive(todos_leads):
         arquivos = results.get("files", [])
 
         if arquivos:
-            # Atualiza o arquivo existente
             file_id = arquivos[0]["id"]
             drive_service.files().update(fileId=file_id, media_body=media).execute()
-            print(f"✅ Cache atualizado no Drive: {DRIVE_CACHE_FILENAME}")
         else:
-            # Cria um novo arquivo de cache
             metadata = {"name": DRIVE_CACHE_FILENAME, "mimeType": "application/json"}
             drive_service.files().create(body=metadata, media_body=media, fields="id").execute()
-            print(f"✅ Cache criado no Drive: {DRIVE_CACHE_FILENAME}")
         return True
     except Exception as e:
         print(f"⚠️ Erro ao salvar cache no Drive: {e}")
         return False
 
 def carregar_cache_do_drive():
-    """Baixa o cache JSON do Google Drive. Rápido: apenas 1 chamada de API."""
     try:
         _, drive_service = criar_servicos()
         if not drive_service:
@@ -229,7 +250,6 @@ def carregar_cache_do_drive():
         arquivos = results.get("files", [])
 
         if not arquivos:
-            print("ℹ️ Nenhum cache encontrado no Drive. Será necessário sincronizar.")
             return None
 
         file_id = arquivos[0]["id"]
@@ -240,40 +260,10 @@ def carregar_cache_do_drive():
         while not done:
             _, done = downloader.next_chunk()
         fh.seek(0)
-        leads = json.loads(fh.read().decode("utf-8"))
-        print(f"⚡ Cache do Drive carregado: {len(leads)} leads.")
-        return leads
+        return json.loads(fh.read().decode("utf-8"))
     except Exception as e:
         print(f"⚠️ Erro ao carregar cache do Drive: {e}")
         return None
-
-def criar_servicos():
-    """Cria instâncias isoladas usando credentials.json local ou a variável GOOGLE_CREDENTIALS_JSON no Vercel"""
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON") or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-    
-    if creds_json:
-        try:
-            creds_info = json.loads(creds_json)
-            creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
-        except Exception as e:
-            print(f"Erro ao decodificar GOOGLE_CREDENTIALS_JSON: {e}")
-            if os.path.exists(CREDENTIALS_PATH):
-                creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
-            else:
-                return None, None
-    elif os.path.exists(CREDENTIALS_PATH):
-        creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
-    else:
-        print("⚠️ Arquivo credentials.json não encontrado e GOOGLE_CREDENTIALS_JSON não configurada.")
-        return None, None
-
-    try:
-        gclient = gspread.authorize(creds)
-        drive_service = build('drive', 'v3', credentials=creds)
-        return gclient, drive_service
-    except Exception as e:
-        print(f"Erro ao inicializar serviços do Google: {e}")
-        return None, None
 
 def obter_info_pasta(drive_service, folder_id):
     if not folder_id:
@@ -330,9 +320,10 @@ def extrair_valor(row, chaves_possiveis):
     return ""
 
 def processar_item_planilha(item):
-    # Conexão dedicada para esta thread
     gclient, drive_service = criar_servicos()
-    
+    if not drive_service:
+        return []
+
     sheet_id = item['id']
     nome_planilha = item['name']
     mime_type = item.get('mimeType', '')
@@ -420,32 +411,28 @@ def processar_item_planilha(item):
                                 "data_retorno": extrair_valor(row, ["Data de Retorno", "Retorno"]),
                                 "resumo": extrair_valor(row, ["Resumo", "Objeção", "Observacao", "Notas"])
                             })
-            break # Leitura concluída com sucesso
+            break
 
         except Exception as e:
             if tentativa == max_tentativas:
-                print(f" ⚠️ Falha definitiva ao processar '{nome_planilha}': {e}")
+                print(f" ⚠️ Falha ao processar '{nome_planilha}': {e}")
             else:
-                time.sleep(1) # Pausa rápida antes de tentar de novo
+                time.sleep(1)
                 
     return leads_item
 
 def obter_todos_leads_eko(force_refresh=False):
-    # 1. Cache local (disco) — instantâneo em ambiente local
     if not force_refresh and os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, 'r', encoding='utf-8') as f:
                 todos_leads = json.load(f)
-                print(f"⚡ CACHE LOCAL CARREGADO: {len(todos_leads)} leads.")
                 return todos_leads
         except Exception:
             pass
 
-    # 2. Cache no Google Drive — usado no Vercel para persistência entre deploys
     if not force_refresh:
         leads_cache_drive = carregar_cache_do_drive()
         if leads_cache_drive is not None:
-            # Salva localmente em /tmp para a próxima requisição nesta instância
             try:
                 with open(CACHE_FILE, 'w', encoding='utf-8') as f:
                     json.dump(leads_cache_drive, f, ensure_ascii=False, indent=2)
@@ -453,14 +440,9 @@ def obter_todos_leads_eko(force_refresh=False):
                 pass
             return leads_cache_drive
 
-    # 3. Varredura completa das planilhas (só quando force_refresh=True)
     gclient, drive_service = criar_servicos()
     if not drive_service:
-        print("⚠️ Conexão com o Google Drive indisponível (credenciais ausentes).")
         return []
-    
-    print("\n" + "🚀 " + "="*55)
-    print(" Buscando e Sincronizando Planilhas do Drive...")
     
     planilhas = []
     page_token = None
@@ -485,8 +467,6 @@ def obter_todos_leads_eko(force_refresh=False):
         print(f" ❌ ERRO ao listar arquivos do Drive: {e}")
         return []
     
-    print(f" 📌 Total de planilhas: {len(planilhas)}")
-    
     todos_leads = []
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(processar_item_planilha, item) for item in planilhas]
@@ -494,23 +474,17 @@ def obter_todos_leads_eko(force_refresh=False):
             resultado = future.result()
             todos_leads.extend(resultado)
 
-    # Salva cache local (/tmp ou disco)
     try:
         with open(CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump(todos_leads, f, ensure_ascii=False, indent=2)
-        print(f" 💾 Cache local salvo!")
     except Exception as e:
         print(f" ⚠️ Erro ao salvar cache local: {e}")
 
-    # Salva cache no Drive para persistência entre deploys (Vercel)
     salvar_cache_no_drive(todos_leads)
 
-    print(f"\n ✅ TOTAL: {len(todos_leads)} leads carregados.")
-    print("="*55 + "\n")
     return todos_leads
 
 def atualizar_lead_no_cache(sheet_id, nome_aba, linha, coluna_nome, novo_valor):
-    """Atualiza um lead no cache local e persiste no Drive."""
     if not os.path.exists(CACHE_FILE):
         return
     try:
