@@ -23,6 +23,138 @@ if os.environ.get("VERCEL"):
 else:
     CACHE_FILE = os.path.join(BASE_DIR, "leads_cache.json")
 
+def adicionar_novo_lead_no_drive(dados_lead):
+    """
+    Busca a planilha no Drive, insere o lead na aba da cidade (ex: Cuiabá)
+    e atualiza o cache local sem apagar os leads existentes.
+    """
+    gclient, drive_service = criar_servicos()
+    
+    macroregiao = dados_lead.get('macroregiao', '').strip()
+    cidade_aba = dados_lead.get('aba', '').strip() # Ex: "Cuiabá"
+    
+    if not cidade_aba:
+        raise ValueError("O nome da cidade/aba é obrigatório.")
+
+    # 1. Buscar a planilha no Drive pela Macrorregião/Nome
+    query = f"(mimeType='application/vnd.google-apps.spreadsheet' or mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') and trashed=false"
+    results = drive_service.files().list(
+        q=query, 
+        fields="files(id, name, mimeType)", 
+        supportsAllDrives=True, 
+        includeItemsFromAllDrives=True
+    ).execute()
+    
+    files = results.get('files', [])
+    target_file = None
+
+    # Tenta achar a planilha que contenha o nome da Macrorregião
+    for f in files:
+        if normalizar(macroregiao) in normalizar(f['name']) or normalizar(f['name']) in normalizar(macroregiao):
+            target_file = f
+            break
+
+    if not target_file and files:
+        target_file = files[0] # Fallback para a primeira disponível se não achar exata
+
+    if not target_file:
+        raise Exception("Nenhuma planilha correspondente foi encontrada no Google Drive.")
+
+    sheet_id = target_file['id']
+    mime_type = target_file.get('mimeType', '')
+    linha_inserida = None
+
+    # Monta a linha exatamente na ordem das colunas
+    nova_linha = [
+        dados_lead.get('empresa', ''),
+        dados_lead.get('tipo', ''),
+        dados_lead.get('bairro', ''),
+        dados_lead.get('telefone', ''),
+        dados_lead.get('decisor', ''),
+        dados_lead.get('instagram_site', ''),
+        dados_lead.get('marca_propria', ''),
+        dados_lead.get('potencial', 'Médio'),
+        dados_lead.get('status', 'A Ligar (Novo)'),
+        dados_lead.get('data_ultimo', ''),
+        dados_lead.get('data_retorno', ''),
+        dados_lead.get('resumo', '')
+    ]
+
+    # 2. Escreve no Google Drive (Trata Google Sheets nativo e XLSX)
+    if mime_type == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+        # Planilha Excel .xlsx no Drive
+        request = drive_service.files().get_media(fileId=sheet_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        fh.seek(0)
+
+        wb = openpyxl.load_workbook(fh)
+        
+        # Procura a aba da cidade
+        aba_encontrada = None
+        for sname in wb.sheetnames:
+            if normalizar(sname) == normalizar(cidade_aba):
+                aba_encontrada = sname
+                break
+
+        if not aba_encontrada:
+            aba_encontrada = cidade_aba
+            ws = wb.create_sheet(title=aba_encontrada)
+            ws.append(["Nome da Empresa", "Tipo", "Bairro", "Telefone", "Decisor", "Instagram/Site", "Marca Própria", "Potencial", "Status", "Data Último", "Data Retorno", "Resumo"])
+        else:
+            ws = wb[aba_encontrada]
+
+        ws.append(nova_linha)
+        linha_inserida = ws.max_row
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        media = MediaIoBaseUpload(output, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', resumable=True)
+        drive_service.files().update(fileId=sheet_id, media_body=media, supportsAllDrives=True).execute()
+
+    else:
+        # Planilha Nativa do Google Sheets
+        sheet = gclient.open_by_key(sheet_id)
+        worksheet = None
+        
+        for ws in sheet.worksheets():
+            if normalizar(ws.title) == normalizar(cidade_aba):
+                worksheet = ws
+                break
+
+        if not worksheet:
+            # Cria a aba com o nome da cidade caso não exista
+            worksheet = sheet.add_worksheet(title=cidade_aba, rows="100", cols="20")
+            worksheet.append_row(["Nome da Empresa", "Tipo", "Bairro", "Telefone", "Decisor", "Instagram/Site", "Marca Própria", "Potencial", "Status", "Data Último", "Data Retorno", "Resumo"])
+
+        worksheet.append_row(nova_linha)
+        linha_inserida = len(worksheet.get_all_values())
+
+    # 3. Atualiza os identificadores do lead
+    dados_lead['sheet_id'] = sheet_id
+    dados_lead['linha_id'] = linha_inserida
+
+    # 4. Atualiza o Cache Local SEM apagar os leads antigos
+    leads_cache = []
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                leads_cache = json.load(f)
+        except Exception:
+            leads_cache = []
+
+    leads_cache.append(dados_lead)
+
+    with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(leads_cache, f, ensure_ascii=False, indent=2)
+
+    return dados_lead
+
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
