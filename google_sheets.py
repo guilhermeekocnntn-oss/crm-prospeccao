@@ -89,10 +89,11 @@ def adicionar_novo_lead_no_drive(dados_lead):
         raise Exception("Serviços do Google Drive indisponíveis.")
 
     macroregiao = dados_lead.get('macroregiao', '').strip()
-    cidade_aba = dados_lead.get('aba', '').strip()
     
-    if not cidade_aba:
-        raise ValueError("O nome da cidade/aba é obrigatório.")
+    # Se a cidade/aba vier vazia, define "Geral" como padrão
+    cidade_aba = dados_lead.get('aba', '').strip() or dados_lead.get('cidade', '').strip() or 'Geral'
+    dados_lead['aba'] = cidade_aba
+    dados_lead['cidade'] = cidade_aba
 
     query = "(mimeType='application/vnd.google-apps.spreadsheet' or mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') and trashed=false"
     results = drive_service.files().list(
@@ -106,7 +107,7 @@ def adicionar_novo_lead_no_drive(dados_lead):
     target_file = None
 
     for f in files:
-        if normalizar(macroregiao) in normalizar(f['name']) or normalizar(f['name']) in normalizar(macroregiao):
+        if macroregiao and (normalizar(macroregiao) in normalizar(f['name']) or normalizar(f['name']) in normalizar(macroregiao)):
             target_file = f
             break
 
@@ -188,7 +189,7 @@ def adicionar_novo_lead_no_drive(dados_lead):
     dados_lead['sheet_id'] = sheet_id
     dados_lead['linha_id'] = linha_inserida
 
-    # Atualiza o cache local e o cache do Drive
+    # Atualiza o cache local
     leads_cache = []
     if os.path.exists(CACHE_FILE):
         try:
