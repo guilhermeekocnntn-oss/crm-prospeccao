@@ -234,16 +234,34 @@ def atualizar():
 
 @app.route('/adicionar_lead', methods=['POST'])
 def adicionar_lead():
-    """Rota para cadastrar um novo lead individual no CRM"""
-    dados = request.form.to_dict() if request.form else (request.json or {})
-    novo_lead = adicionar_lead_db(dados)
-    
-    global LEADS_MEMORIA
-    LEADS_MEMORIA.insert(0, novo_lead) # Adiciona no topo da lista na memória
-    
-    if request.is_json:
-        return jsonify({"sucesso": True, "lead": novo_lead})
-    return redirect(url_for('index'))
+    try:
+        dados_lead = {
+            "uf": request.form.get('uf', 'OUTROS'),
+            "uf_nome": request.form.get('uf_nome', 'Geral'),
+            "pasta": request.form.get('pasta', 'Geral'),
+            "macroregiao": request.form.get('macroregiao', ''),
+            "aba": request.form.get('aba', ''),  # Nome da Cidade (ex: Cuiabá)
+            "empresa": request.form.get('empresa', ''),
+            "tipo": request.form.get('tipo', ''),
+            "bairro": request.form.get('bairro', ''),
+            "telefone": request.form.get('telefone', ''),
+            "decisor": request.form.get('decisor', ''),
+            "instagram_site": request.form.get('instagram_site', ''),
+            "marca_propria": request.form.get('marca_propria', ''),
+            "potencial": request.form.get('potencial', 'Médio'),
+            "status": request.form.get('status', 'A Ligar (Novo)'),
+            "data_ultimo": request.form.get('data_ultimo', ''),
+            "data_retorno": request.form.get('data_retorno', ''),
+            "resumo": request.form.get('resumo', '')
+        }
+
+        # Envia para a planilha no Drive e atualiza o cache local sem apagar a lista
+        adicionar_novo_lead_no_drive(dados_lead)
+
+        return jsonify({"success": True, "message": "Lead adicionado e sincronizado com sucesso!"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 
 @app.route('/sincronizar_drive')
 def sincronizar_drive():
