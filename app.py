@@ -2,12 +2,13 @@ import sys
 import os
 import json
 
+
 # Ajusta encodificação do stdout para UTF-8 no Windows
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from flask import Flask, render_template, request, jsonify, redirect, url_for
-from google_sheets import obter_todos_leads_eko, atualizar_lead_tempo_real, ESTADOS_MAP, CACHE_FILE
+from google_sheets import obter_todos_leads_eko, atualizar_lead_tempo_real, adicionar_novo_lead_no_drive
 from database import importar_planilhas_pasta, obter_todos_leads_db, adicionar_lead_db, atualizar_lead_db, buscar_cidades_ibge
 
 app = Flask(__name__)
