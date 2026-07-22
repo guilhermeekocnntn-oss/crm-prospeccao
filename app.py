@@ -1,15 +1,27 @@
 import sys
 import os
 import json
-
+import traceback
 
 # Ajusta encodificação do stdout para UTF-8 no Windows
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from flask import Flask, render_template, request, jsonify, redirect, url_for
-from google_sheets import obter_todos_leads_eko, atualizar_lead_tempo_real, adicionar_novo_lead_no_drive
-from database import importar_planilhas_pasta, obter_todos_leads_db, adicionar_lead_db, atualizar_lead_db, buscar_cidades_ibge
+from google_sheets import (
+    obter_todos_leads_eko, 
+    atualizar_lead_tempo_real, 
+    adicionar_novo_lead_no_drive, 
+    ESTADOS_MAP, 
+    CACHE_FILE
+)
+from database import (
+    importar_planilhas_pasta, 
+    obter_todos_leads_db, 
+    adicionar_lead_db, 
+    atualizar_lead_db, 
+    buscar_cidades_ibge
+)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "crm_prospeccao_secret_key")
@@ -26,14 +38,14 @@ def carregar_dados_iniciais(force_refresh=False):
     global LEADS_MEMORIA
     print("[INFO] Carregando dados de leads para a memória RAM...")
     
-    # 1. Carrega o banco SQLite local instantaneamente (milissegundos)
+    # 1. Carrega o banco SQLite local instantaneamente (se existir)
     leads_db = []
     try:
         leads_db = obter_todos_leads_db()
     except Exception as e:
         print(f"[AVISO] Erro ao carregar dados do SQLite: {e}")
 
-    # 2. No Vercel, lê o cache instantâneo se existir. Só faz varredura completa se force_refresh=True ou local.
+    # 2. Lê o cache instantâneo ou sincroniza do Google Drive
     leads_drive = []
     if os.path.exists(CACHE_FILE) or force_refresh or not os.environ.get("VERCEL"):
         try:
@@ -69,7 +81,6 @@ def obter_tipos_e_status(leads):
         if s and s.lower() not in ('none', '', '-'):
             status_set.add(s)
 
-    # Status padrão comuns
     status_padrao = [
         "A Ligar (Novo)",
         "Não Atendeu (T1)",
@@ -81,7 +92,6 @@ def obter_tipos_e_status(leads):
     for sp in status_padrao:
         status_set.add(sp)
 
-    # Tipos padrão se a lista for pequena
     tipos_padrao = ["Distribuidora", "Salão", "Rede de Salões", "Varejo", "Atacado", "Outros"]
     for tp in tipos_padrao:
         tipos_set.add(tp)
@@ -90,7 +100,7 @@ def obter_tipos_e_status(leads):
 
 @app.route('/api/cidades/<uf>')
 def api_cidades(uf):
-    """Retorna a lista de cidades para a UF — sempre mescla abas das planilhas + todas as cidades IBGE"""
+    """Retorna a lista de cidades para a UF — mescla abas das planilhas + IBGE"""
     uf_upper = uf.upper()
     cidades_planilha = obter_cidades_por_uf(LEADS_MEMORIA).get(uf_upper, [])
 
@@ -101,11 +111,9 @@ def api_cidades(uf):
     except Exception as e:
         print(f"Erro ao buscar IBGE para {uf_upper}: {e}")
 
-    # Mescla: abas da planilha aparecem primeiro (marcadas com ★), depois o restante do IBGE
     cidades_planilha_set = set(cidades_planilha)
     cidades_ibge_extras = [c for c in cidades_ibge if c not in cidades_planilha_set]
 
-    # Abas existentes ficam no topo com marcador visual
     cidades_com_aba = [f"★ {c}" for c in sorted(cidades_planilha)]
     cidades_finais = cidades_com_aba + sorted(cidades_ibge_extras)
 
@@ -118,95 +126,95 @@ def api_cidades(uf):
 def index():
     global LEADS_MEMORIA
     
-    # Se a memória estiver vazia, recarrega
-    if not LEADS_MEMORIA:
-        carregar_dados_iniciais()
+    try:
+        if not LEADS_MEMORIA:
+            carregar_dados_iniciais()
 
-    # Métricas Gerais
-    total_leads = len(LEADS_MEMORIA)
-    total_agendados = sum(
-        1 for l in LEADS_MEMORIA 
-        if 'agendado' in str(l.get('status', '')).lower() or 'retorno' in str(l.get('status', '')).lower()
-    )
-    total_fechados = sum(
-        1 for l in LEADS_MEMORIA 
-        if 'fechado' in str(l.get('status', '')).lower()
-    )
+        total_leads = len(LEADS_MEMORIA)
+        total_agendados = sum(
+            1 for l in LEADS_MEMORIA 
+            if 'agendado' in str(l.get('status', '')).lower() or 'retorno' in str(l.get('status', '')).lower()
+        )
+        total_fechados = sum(
+            1 for l in LEADS_MEMORIA 
+            if 'fechado' in str(l.get('status', '')).lower()
+        )
 
-    # Parâmetros dos filtros recebidos do formulário
-    busca_raw = request.args.get('q', request.args.get('busca', '')).strip()
-    busca_termo = busca_raw.lower()
-    estado_filtro = request.args.get('uf', request.args.get('estado', '')).strip()
-    cidade_filtro = normalizar_cidade(request.args.get('cidade', ''))
-    tipo_filtro = request.args.get('tipo', '').strip()
-    status_filtro = request.args.get('status', '').strip()
-    potencial_filtro = request.args.get('potencial', '').strip()
+        busca_raw = request.args.get('q', request.args.get('busca', '')).strip()
+        busca_termo = busca_raw.lower()
+        estado_filtro = request.args.get('uf', request.args.get('estado', '')).strip()
+        cidade_filtro = normalizar_cidade(request.args.get('cidade', ''))
+        tipo_filtro = request.args.get('tipo', '').strip()
+        status_filtro = request.args.get('status', '').strip()
+        potencial_filtro = request.args.get('potencial', '').strip()
 
-    # Mapeamentos e Listas dinâmicas extraídas das planilhas do projeto
-    cidades_por_uf = obter_cidades_por_uf(LEADS_MEMORIA)
-    tipos_disponiveis, status_disponiveis = obter_tipos_e_status(LEADS_MEMORIA)
+        cidades_por_uf = obter_cidades_por_uf(LEADS_MEMORIA)
+        tipos_disponiveis, status_disponiveis = obter_tipos_e_status(LEADS_MEMORIA)
 
-    # FILTRAGEM DIRETO DA MEMÓRIA RAM
-    leads_filtrados = LEADS_MEMORIA
+        leads_filtrados = LEADS_MEMORIA
 
-    if estado_filtro:
-        leads_filtrados = [
-            l for l in leads_filtrados 
-            if l.get('uf') == estado_filtro or l.get('uf_nome') == estado_filtro
-        ]
+        if estado_filtro:
+            leads_filtrados = [
+                l for l in leads_filtrados 
+                if l.get('uf') == estado_filtro or l.get('uf_nome') == estado_filtro
+            ]
 
-    if cidade_filtro:
-        leads_filtrados = [
-            l for l in leads_filtrados
-            if normalizar_cidade(l.get('cidade') or l.get('aba') or '') == cidade_filtro
-        ]
+        if cidade_filtro:
+            leads_filtrados = [
+                l for l in leads_filtrados
+                if normalizar_cidade(l.get('cidade') or l.get('aba') or '') == cidade_filtro
+            ]
 
-    if tipo_filtro:
-        leads_filtrados = [
-            l for l in leads_filtrados 
-            if l.get('tipo') == tipo_filtro
-        ]
+        if tipo_filtro:
+            leads_filtrados = [
+                l for l in leads_filtrados 
+                if l.get('tipo') == tipo_filtro
+            ]
 
-    if status_filtro:
-        leads_filtrados = [
-            l for l in leads_filtrados 
-            if l.get('status') == status_filtro
-        ]
+        if status_filtro:
+            leads_filtrados = [
+                l for l in leads_filtrados 
+                if l.get('status') == status_filtro
+            ]
 
-    if potencial_filtro:
-        leads_filtrados = [
-            l for l in leads_filtrados 
-            if l.get('potencial') == potencial_filtro
-        ]
+        if potencial_filtro:
+            leads_filtrados = [
+                l for l in leads_filtrados 
+                if l.get('potencial') == potencial_filtro
+            ]
 
-    if busca_termo:
-        leads_filtrados = [
-            l for l in leads_filtrados 
-            if busca_termo in str(l.get('empresa', '')).lower() 
-            or busca_termo in str(l.get('cidade', '')).lower()
-            or busca_termo in str(l.get('bairro', '')).lower()
-            or busca_termo in str(l.get('telefone', '')).lower()
-            or busca_termo in str(l.get('decisor', '')).lower()
-        ]
+        if busca_termo:
+            leads_filtrados = [
+                l for l in leads_filtrados 
+                if busca_termo in str(l.get('empresa', '')).lower() 
+                or busca_termo in str(l.get('cidade', '')).lower()
+                or busca_termo in str(l.get('bairro', '')).lower()
+                or busca_termo in str(l.get('telefone', '')).lower()
+                or busca_termo in str(l.get('decisor', '')).lower()
+            ]
 
-    return render_template(
-        'dashboard.html', 
-        leads=leads_filtrados, 
-        total_leads=total_leads,
-        total_agendados=total_agendados,
-        total_fechados=total_fechados,
-        estados=ESTADOS_MAP,
-        cidades_por_uf=cidades_por_uf,
-        cidades_json=json.dumps(cidades_por_uf, ensure_ascii=False),
-        tipos=tipos_disponiveis,
-        status_lista=status_disponiveis,
-        f_busca=busca_raw,
-        f_uf=estado_filtro,
-        f_cidade=cidade_filtro,
-        f_tipo=tipo_filtro,
-        f_status=status_filtro,
-        f_potencial=potencial_filtro
-    )
+        return render_template(
+            'dashboard.html', 
+            leads=leads_filtrados, 
+            total_leads=total_leads,
+            total_agendados=total_agendados,
+            total_fechados=total_fechados,
+            estados=ESTADOS_MAP,
+            cidades_por_uf=cidades_por_uf,
+            cidades_json=json.dumps(cidades_por_uf, ensure_ascii=False),
+            tipos=tipos_disponiveis,
+            status_lista=status_disponiveis,
+            f_busca=busca_raw,
+            f_uf=estado_filtro,
+            f_cidade=cidade_filtro,
+            f_tipo=tipo_filtro,
+            f_status=status_filtro,
+            f_potencial=potencial_filtro
+        )
+    except Exception as e:
+        print("❌ ERRO NA ROTA PRINCIPAL:")
+        print(traceback.format_exc())
+        return f"<h1>Erro Interno no Servidor</h1><pre>{str(e)}</pre>", 500
 
 @app.route('/atualizar_lead', methods=['POST'])
 def atualizar():
@@ -217,13 +225,11 @@ def atualizar():
     coluna = dados.get('coluna')
     novo_valor = dados.get('valor')
 
-    # Atualiza imediatamente na memória RAM do site
     global LEADS_MEMORIA
     for lead in LEADS_MEMORIA:
         if str(lead.get('sheet_id')) == str(sheet_id) and str(lead.get('aba')) == str(nome_aba) and str(lead.get('linha_id')) == str(linha):
             lead[coluna] = novo_valor
 
-    # Atualiza no Google Drive ou SQLite conforme a origem
     if sheet_id and not str(sheet_id).startswith('db_'):
         sucesso = atualizar_lead_tempo_real(sheet_id, nome_aba, linha, coluna, novo_valor)
     else:
@@ -240,7 +246,8 @@ def adicionar_lead():
             "uf_nome": request.form.get('uf_nome', 'Geral'),
             "pasta": request.form.get('pasta', 'Geral'),
             "macroregiao": request.form.get('macroregiao', ''),
-            "aba": request.form.get('aba', ''),  # Nome da Cidade (ex: Cuiabá)
+            "aba": request.form.get('aba', ''),
+            "cidade": request.form.get('aba', ''),
             "empresa": request.form.get('empresa', ''),
             "tipo": request.form.get('tipo', ''),
             "bairro": request.form.get('bairro', ''),
@@ -255,23 +262,26 @@ def adicionar_lead():
             "resumo": request.form.get('resumo', '')
         }
 
-        # Envia para a planilha no Drive e atualiza o cache local sem apagar a lista
-        adicionar_novo_lead_no_drive(dados_lead)
+        # Envia para a planilha no Drive
+        lead_criado = adicionar_novo_lead_no_drive(dados_lead)
 
-        return jsonify({"success": True, "message": "Lead adicionado e sincronizado com sucesso!"})
+        # Adiciona na memória RAM global para os leads não sumirem
+        global LEADS_MEMORIA
+        LEADS_MEMORIA.append(lead_criado)
+
+        return jsonify({"success": True, "message": "Lead adicionado e sincronizado com sucesso!", "lead": lead_criado})
     except Exception as e:
+        print("❌ Erro em /adicionar_lead:")
+        print(traceback.format_exc())
         return jsonify({"success": False, "error": str(e)}), 500
-
 
 @app.route('/sincronizar_drive')
 def sincronizar_drive():
-    """Botão/Rota opcional para forçar a atualização completa vinda do Google Drive"""
     carregar_dados_iniciais(force_refresh=True)
     return jsonify({"status": "sucesso", "total": len(LEADS_MEMORIA)})
 
 @app.route('/importar', methods=['POST'])
 def importar():
-    """Rota para importar planilhas locais para o banco de dados"""
     caminho_pasta = request.form.get('caminho_pasta', '').strip()
     if caminho_pasta:
         qtd = importar_planilhas_pasta(caminho_pasta)
